@@ -1,6 +1,9 @@
 # Deploy Hetzner Cloudi ja jäta VM alles demoks.
 # Kustutamise jaoks käivita eraldi "Cleanup Hetzner test servers" workflow.
 #
+# Hetzneri ametlik rDNS (static.X.Y.Z.Y.clients.your-server.de) jääb puutumata,
+# kuna seda on vaja nt mail-serverite või mõne muu validatsiooni jaoks.
+#
 # Vajalikud secrets:
 #   HCLOUD_TOKEN       - Hetzner Cloud API token (Read & Write)
 #   SSH_PRIVATE_KEY    - RSA privaatvõti
@@ -49,7 +52,7 @@ jobs:
             https://github.com/hetznercloud/cli/releases/latest/download/hcloud-linux-amd64.tar.gz
           sudo tar -xzf /tmp/hcloud.tar.gz -C /usr/local/bin hcloud
           sudo apt-get update
-          sudo apt-get install -y ansible rsync netcat-openbsd
+          sudo apt-get install -y ansible netcat-openbsd
 
       - name: Sea SSH võtmed paika
         env:

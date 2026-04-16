@@ -5,10 +5,15 @@
 # `creates:` openssl käsus → sertifikaati ei tehta uuesti, kui ta juba olemas.
 
 - name: Copy docker stack files
-  synchronize:
+  # NB! Kasutame copy moodulit, mitte synchronize't. Synchronize kasutab
+  # rsync'i, mis avab ERALDI SSH ühenduse — see ebaõnnestub, sest
+  # 03-ssh.yml keelas root logini. Copy töötab Ansible olemasoleva
+  # ühenduse kaudu, seega probleemi pole.
+  copy:
     src: "{{ playbook_dir }}/../docker/"
     dest: "{{ app_dir }}/docker/"
-    delete: yes
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
 
 - name: Copy built jar into backend build context
   copy:
