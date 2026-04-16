@@ -1,0 +1,83 @@
+# GitHub Actions workflow, mis käivitab Ansible playbooki automaatselt
+# iga main harusse push'imise peale. Saab ka käsitsi käivitada GitHub UI-st.
+#
+# Vajalikud secrets:
+#   SSH_PRIVATE_KEY    - privaatvõti (RSA, koos BEGIN/END ridadega)
+#   SSH_PUBLIC_KEY     - avalik võti (.pub faili sisu)
+#   SSH_PASSPHRASE     - privaatvõtme parool
+#   SERVER_HOST        - serveri IP või FQDN
+#   SERVER_USER        - SSH kasutaja (nt ubuntu)
+
+name: Deploy PetClinic
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Ansible deploy serverisse
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Klooni repo
+        uses: actions/checkout@v4
+
+      - name: Paigalda Ansible
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible rsync expect
+
+      - name: Sea SSH võtmed paika
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PUBLIC_KEY:  ${{ secrets.SSH_PUBLIC_KEY }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          echo "$SSH_PUBLIC_KEY"  > ~/.ssh/id_rsa.pub
+          chmod 600 ~/.ssh/id_rsa
+          chmod 644 ~/.ssh/id_rsa.pub
+          ssh-keyscan -H "${{ secrets.SERVER_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Käivita ssh-agent ja lisa võti parooliga
+        # Kasutame SSH_ASKPASS trikki — ssh-add küsib parooli "askpass"
+        # skripti kaudu, mis lihtsalt tagastab keskkonnamuutuja väärtuse.
+        # DISPLAY + SSH_ASKPASS_REQUIRE=force sunnivad seda kasutama.
+        env:
+          SSH_PASSPHRASE: ${{ secrets.SSH_PASSPHRASE }}
+        run: |
+          eval "$(ssh-agent -s)"
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> $GITHUB_ENV
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> $GITHUB_ENV
+
+          ASKPASS=$(mktemp)
+          cat > "$ASKPASS" <<'EOF'
+          #!/bin/sh
+          echo "$SSH_PASSPHRASE"
+          EOF
+          chmod +x "$ASKPASS"
+
+          DISPLAY=none SSH_ASKPASS="$ASKPASS" SSH_ASKPASS_REQUIRE=force \
+            ssh-add ~/.ssh/id_rsa < /dev/null
+
+          rm -f "$ASKPASS"
+          ssh-add -l
+
+      - name: Genereeri inventory secretitest
+        run: |
+          cat > ansible/inventory.ini <<EOF
+          [petclinic]
+          petclinic-server ansible_host=${{ secrets.SERVER_HOST }}
+
+          [petclinic:vars]
+          ansible_user=${{ secrets.SERVER_USER }}
+          ansible_python_interpreter=/usr/bin/python3
+          EOF
+
+      - name: Käivita Ansible playbook
+        working-directory: ansible
+        env:
+          SSH_PUBKEY_PATH: /home/runner/.ssh/id_rsa.pub
+        run: ansible-playbook playbook.yml

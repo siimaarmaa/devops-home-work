@@ -1,0 +1,43 @@
+---
+# Peamine playbook. Ise ei tee midagi, kutsub välja seitse eraldi faili.
+
+- name: Valmista Ubuntu 24.04 server ette ja juuruta Spring PetClinic
+  hosts: petclinic
+  become: true
+
+  vars:
+    app_user: petclinic
+    app_dir: /opt/petclinic
+    repo_url: https://github.com/spring-projects/spring-petclinic.git
+    repo_dir: /opt/petclinic/src
+    # Avaliku võtme asukoht. Võib üle kirjutada -e ssh_pubkey_path=...
+    # või keskkonnamuutujaga SSH_PUBKEY_PATH.
+    ssh_pubkey_path: "{{ lookup('env', 'SSH_PUBKEY_PATH') | default(lookup('env','HOME') + '/.ssh/id_rsa.pub', true) }}"
+
+  tasks:
+    - name: 1. Baaspakettide paigaldus
+      import_tasks: tasks/01-base.yml
+
+    - name: 2. Rakenduse kasutaja loomine
+      import_tasks: tasks/02-user.yml
+
+    - name: 3. SSH karmistamine (ainult võtmega)
+      import_tasks: tasks/03-ssh.yml
+
+    - name: 4. Tulemüüri (UFW) seadistamine
+      import_tasks: tasks/04-firewall.yml
+
+    - name: 5. Dockeri paigaldus
+      import_tasks: tasks/05-docker.yml
+
+    - name: 6. PetClinic kloonimine ja Maven build
+      import_tasks: tasks/06-build.yml
+
+    - name: 7. Docker stacki juurutus
+      import_tasks: tasks/07-deploy.yml
+
+  handlers:
+    - name: Restart ssh
+      service:
+        name: ssh
+        state: restarted

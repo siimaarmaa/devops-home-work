@@ -1,0 +1,19 @@
+---
+# Karmistab SSH konfiguratsiooni: lubatud on AINULT võtmega autentimine.
+# Kirjutab eraldi drop-in faili /etc/ssh/sshd_config.d/ kataloogi, et
+# mitte segada distro vaikekonfiguratsiooni. Pärast muudatust restardib SSH.
+
+- name: Enforce SSH key-only authentication
+  blockinfile:
+    path: /etc/ssh/sshd_config.d/99-hardening.conf
+    create: yes
+    mode: '0644'
+    block: |
+      PasswordAuthentication no
+      PermitRootLogin no
+      ChallengeResponseAuthentication no
+      KbdInteractiveAuthentication no
+      UsePAM yes
+      PubkeyAuthentication yes
+      PermitEmptyPasswords no
+  notify: Restart ssh

@@ -1,0 +1,61 @@
+# Kolm teenust: nginx (proxy), backend (Spring Boot), db (Postgres).
+# Kaks võrku: frontend (nginx + backend) ja backend (backend + db).
+# Backend võrk on "internal", mis tähendab et db ei saa internetti minna
+# ja internetist ei saa db-le ligi.
+
+services:
+  nginx:
+    build: ./nginx
+    container_name: petclinic-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"      # HTTP (suunab HTTPS-ile)
+      - "443:443"    # HTTPS
+    networks:
+      - frontend     # ainult frontend võrgus — ei näe db-d
+    depends_on:
+      - backend
+
+  backend:
+    build: ./backend
+    container_name: petclinic-backend
+    restart: unless-stopped
+    environment:
+      SPRING_PROFILES_ACTIVE: postgres
+      POSTGRES_URL: jdbc:postgresql://db:5432/petclinic
+      POSTGRES_USER: petclinic
+      POSTGRES_PASS: petclinic
+    networks:
+      - frontend     # et nginx saaks ligi
+      - backend      # et ise db-le ligi saaks
+    expose:
+      - "8080"       # ainult Docker sees, mitte hostis
+    depends_on:
+      - db
+
+  db:
+    image: postgres:16-alpine
+    container_name: petclinic-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: petclinic
+      POSTGRES_USER: petclinic
+      POSTGRES_PASSWORD: petclinic
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - backend      # AINULT backend võrk — proxy ei näe
+    expose:
+      - "5432"       # ainult Docker sees
+
+networks:
+  frontend:
+    driver: bridge
+    name: petclinic_frontend
+  backend:
+    driver: bridge
+    name: petclinic_backend
+    internal: true   # ei saa internetti ega internetist sisse
+
+volumes:
+  pgdata:

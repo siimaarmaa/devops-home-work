@@ -1,0 +1,24 @@
+---
+# UFW seadistus: keela kõik sissetulev, luba väljaminev,
+# tee auk ainult SSH-le (22), HTTP-le (80) ja HTTPS-le (443).
+# Backend (8080) ja Postgres (5432) EI ole hostis avatud — neid
+# pakub ainult Docker oma sisevõrkudes.
+
+- name: Configure UFW defaults
+  ufw:
+    direction: "{{ item.dir }}"
+    policy: "{{ item.pol }}"
+  loop:
+    - { dir: incoming, pol: deny }
+    - { dir: outgoing, pol: allow }
+
+- name: Allow SSH, HTTP, HTTPS
+  ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop: ['22', '80', '443']
+
+- name: Enable UFW
+  ufw:
+    state: enabled

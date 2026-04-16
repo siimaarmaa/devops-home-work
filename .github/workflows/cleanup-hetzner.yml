@@ -1,0 +1,29 @@
+# Abi-workflow: kustutab kõik test-serverid, mille nimi algab "petclinic-ci-".
+# Kasulik kui test-hetzner workflow jäi pooleli ja server jäi tolmuma.
+
+name: Cleanup Hetzner test servers
+
+on:
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Paigalda hcloud CLI
+        run: |
+          curl -fsSL https://github.com/hetznercloud/cli/releases/latest/download/hcloud-linux-amd64.tar.gz \
+            | sudo tar -xz -C /usr/local/bin hcloud
+
+      - name: Kustuta kõik petclinic-ci-* serverid
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: |
+          SERVERS=$(hcloud server list -o noheader -o columns=name | grep '^petclinic-ci-' || true)
+          if [ -z "$SERVERS" ]; then
+            echo "Ei leidnud ühtegi test-serverit."
+            exit 0
+          fi
+          echo "Kustutan:"
+          echo "$SERVERS"
+          echo "$SERVERS" | xargs -n1 hcloud server delete

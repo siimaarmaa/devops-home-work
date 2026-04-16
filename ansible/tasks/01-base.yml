@@ -1,0 +1,27 @@
+---
+# Uuendab apt cache, paigaldab süsteemiuuendused ja vajalikud baaspakettid:
+# - git, curl, ca-certificates, gnupg → vajalikud Dockeri repo lisamiseks
+# - ufw, fail2ban → turvalisus
+# - openjdk-17-jdk, maven → PetClinicu buildimiseks hostil
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Upgrade all packages
+  apt:
+    upgrade: dist
+
+- name: Install base packages
+  apt:
+    name:
+      - git
+      - curl
+      - ca-certificates
+      - gnupg
+      - ufw
+      - fail2ban
+      - openjdk-17-jdk
+      - maven
+    state: present

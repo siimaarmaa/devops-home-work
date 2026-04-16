@@ -1,0 +1,28 @@
+---
+# Loob /opt/petclinic kataloogi, kloonib PetClinicu GitHubist ja
+# buildib selle Maveniga (postgres profiil, testid vahele).
+# `creates:` argument tagab idempotentsuse — kui jar on juba olemas,
+# Maven ei jookse uuesti.
+
+- name: Create app directory
+  file:
+    path: "{{ app_dir }}"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: '0755'
+
+- name: Clone PetClinic repo
+  git:
+    repo: "{{ repo_url }}"
+    dest: "{{ repo_dir }}"
+    version: main
+    force: yes
+  become_user: "{{ app_user }}"
+
+- name: Build PetClinic with Maven (postgres profile, skip tests)
+  command: ./mvnw -Dspring-boot.run.profiles=postgres -DskipTests package
+  args:
+    chdir: "{{ repo_dir }}"
+    creates: "{{ repo_dir }}/target/spring-petclinic-3.5.0-SNAPSHOT.jar"
+  become_user: "{{ app_user }}"

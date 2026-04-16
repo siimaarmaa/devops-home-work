@@ -1,0 +1,32 @@
+---
+# Kopeerib lokaalse ./docker/ kausta serverisse, kopeerib ehitatud jar-i
+# backendi build-konteksti, genereerib self-signed TLS sertifikaadi nginxile
+# ja käivitab kogu Docker Compose stacki.
+# `creates:` openssl käsus → sertifikaati ei tehta uuesti, kui ta juba olemas.
+
+- name: Copy docker stack files
+  synchronize:
+    src: "{{ playbook_dir }}/../docker/"
+    dest: "{{ app_dir }}/docker/"
+    delete: yes
+
+- name: Copy built jar into backend build context
+  copy:
+    src: "{{ repo_dir }}/target/"
+    dest: "{{ app_dir }}/docker/backend/target/"
+    remote_src: yes
+    owner: "{{ app_user }}"
+
+- name: Generate self-signed TLS cert
+  command: >
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048
+    -keyout {{ app_dir }}/docker/nginx/certs/server.key
+    -out {{ app_dir }}/docker/nginx/certs/server.crt
+    -subj "/CN=petclinic.local"
+  args:
+    creates: "{{ app_dir }}/docker/nginx/certs/server.crt"
+
+- name: Bring up docker compose stack
+  command: docker compose up -d --build
+  args:
+    chdir: "{{ app_dir }}/docker"

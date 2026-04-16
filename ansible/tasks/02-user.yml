@@ -1,0 +1,26 @@
+---
+# Loob eraldi süsteemikasutaja `petclinic`, kelle alt rakendus jookseb
+# (mitte root). Paigaldab avaliku SSH võtme tema authorized_keys faili.
+# Võtme asukoht tuleb muutujast ssh_pubkey_path (playbook.yml-is defineeritud).
+
+- name: Create application user
+  user:
+    name: "{{ app_user }}"
+    shell: /bin/bash
+    groups: sudo
+    append: yes
+    create_home: yes
+
+- name: Ensure .ssh dir for app user
+  file:
+    path: "/home/{{ app_user }}/.ssh"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: '0700'
+
+- name: Deploy authorized_key for app user
+  authorized_key:
+    user: "{{ app_user }}"
+    key: "{{ lookup('file', ssh_pubkey_path) }}"
+    state: present

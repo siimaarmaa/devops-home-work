@@ -1,0 +1,201 @@
+# Deploy Hetzner Cloudi ja jäta VM alles demoks.
+# Kustutamise jaoks käivita eraldi "Cleanup Hetzner test servers" workflow.
+#
+# Vajalikud secrets:
+#   HCLOUD_TOKEN       - Hetzner Cloud API token (Read & Write)
+#   SSH_PRIVATE_KEY    - RSA privaatvõti
+#   SSH_PUBLIC_KEY     - RSA avalik võti
+#   SSH_PASSPHRASE     - privaatvõtme parool
+
+name: Test on Hetzner
+
+on:
+  workflow_dispatch:
+    inputs:
+      ssh_key_name:
+        description: 'SSH võtme nimi Hetzneri kontos'
+        required: true
+        default: 'default'
+      server_type:
+        description: 'Hetzneri server type (cx22 soovitatav)'
+        required: true
+        default: 'cx22'
+      location:
+        description: 'Datacenter location'
+        required: true
+        default: 'hel1'
+      keep_on_failure:
+        description: 'Jäta VM alles ka siis kui test ebaõnnestub (debug)'
+        required: true
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+
+jobs:
+  test:
+    name: Loo VM, juuruta, kontrolli, jäta alles
+    runs-on: ubuntu-latest
+
+    env:
+      VM_NAME: petclinic-ci-${{ github.run_id }}
+
+    steps:
+      - name: Klooni repo
+        uses: actions/checkout@v4
+
+      - name: Paigalda hcloud CLI ja Ansible
+        run: |
+          curl -sSL -o /tmp/hcloud.tar.gz \
+            https://github.com/hetznercloud/cli/releases/latest/download/hcloud-linux-amd64.tar.gz
+          sudo tar -xzf /tmp/hcloud.tar.gz -C /usr/local/bin hcloud
+          sudo apt-get update
+          sudo apt-get install -y ansible rsync netcat-openbsd
+
+      - name: Sea SSH võtmed paika
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PUBLIC_KEY:  ${{ secrets.SSH_PUBLIC_KEY }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          echo "$SSH_PUBLIC_KEY"  > ~/.ssh/id_rsa.pub
+          chmod 600 ~/.ssh/id_rsa
+          chmod 644 ~/.ssh/id_rsa.pub
+
+      - name: Käivita ssh-agent ja lisa võti parooliga
+        env:
+          SSH_PASSPHRASE: ${{ secrets.SSH_PASSPHRASE }}
+        run: |
+          eval "$(ssh-agent -s)"
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> $GITHUB_ENV
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> $GITHUB_ENV
+
+          ASKPASS=$(mktemp)
+          cat > "$ASKPASS" <<'EOF'
+          #!/bin/sh
+          echo "$SSH_PASSPHRASE"
+          EOF
+          chmod +x "$ASKPASS"
+          DISPLAY=none SSH_ASKPASS="$ASKPASS" SSH_ASKPASS_REQUIRE=force \
+            ssh-add ~/.ssh/id_rsa < /dev/null
+          rm -f "$ASKPASS"
+          ssh-add -l
+
+      - name: Loo Hetzneri VM
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: |
+          hcloud server create \
+            --name "$VM_NAME" \
+            --type "${{ github.event.inputs.server_type }}" \
+            --image ubuntu-24.04 \
+            --location "${{ github.event.inputs.location }}" \
+            --ssh-key "${{ github.event.inputs.ssh_key_name }}"
+
+          SERVER_IP=$(hcloud server ip "$VM_NAME")
+          echo "SERVER_IP=$SERVER_IP" >> $GITHUB_ENV
+          echo "::notice::VM loodud: $VM_NAME, IP: $SERVER_IP"
+
+      - name: Oota kuni SSH vastab
+        run: |
+          for i in {1..30}; do
+            if nc -z -w2 "$SERVER_IP" 22 2>/dev/null; then
+              echo "SSH vastas pärast $((i*5)) sekundit"
+              ssh-keyscan -H "$SERVER_IP" >> ~/.ssh/known_hosts 2>/dev/null
+              sleep 10
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "SSH ei vastanud 150 sekundi jooksul"
+          exit 1
+
+      - name: Genereeri inventory
+        run: |
+          cat > ansible/inventory.ini <<EOF
+          [petclinic]
+          petclinic-server ansible_host=$SERVER_IP
+
+          [petclinic:vars]
+          ansible_user=root
+          ansible_python_interpreter=/usr/bin/python3
+          EOF
+
+      - name: Kontrolli Ansible ühendust
+        working-directory: ansible
+        run: ansible petclinic -m ping
+
+      - name: Käivita playbook
+        working-directory: ansible
+        env:
+          SSH_PUBKEY_PATH: /home/runner/.ssh/id_rsa.pub
+        run: ansible-playbook playbook.yml
+
+      - name: Kontrolli et HTTPS vastab
+        run: |
+          echo "Ootan kuni backend käivitub (Spring Boot võtab ~60s)..."
+          for i in {1..20}; do
+            if curl -k -sf -o /dev/null https://$SERVER_IP/; then
+              echo "HTTPS vastab ($(($i*5))s pärast)"
+              break
+            fi
+            sleep 5
+          done
+
+          BODY=$(curl -k -s https://$SERVER_IP/)
+          if echo "$BODY" | grep -qi "petclinic\|welcome"; then
+            echo "::notice::PetClinic avaleht töötab"
+          else
+            echo "::error::Avaleht ei sisalda oodatud teksti"
+            echo "$BODY" | head -30
+            exit 1
+          fi
+
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SERVER_IP/)
+          if [ "$STATUS" = "301" ]; then
+            echo "::notice::HTTP -> HTTPS redirect töötab"
+          else
+            echo "::error::Oodatud 301, saadi $STATUS"
+            exit 1
+          fi
+
+      - name: Kontrolli võrgu segmenteerimine
+        # NB! Kasutame petclinic kasutajat, sest playbook keelas root-ina
+        # sisselogimise (PermitRootLogin no). petclinic on docker grupis.
+        run: |
+          ssh -o StrictHostKeyChecking=no petclinic@$SERVER_IP bash <<'EOF'
+          set -e
+          INTERNAL=$(docker network inspect petclinic_backend -f '{{.Internal}}')
+          [ "$INTERNAL" = "true" ] || { echo "FAIL: backend võrk pole internal"; exit 1; }
+          echo "OK: backend internal=true"
+
+          DB_NETS=$(docker inspect petclinic-db -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}')
+          echo "$DB_NETS" | grep -q petclinic_frontend && { echo "FAIL: db on frontend võrgus"; exit 1; } || true
+          echo "OK: db ainult backend võrgus"
+
+          NGINX_NETS=$(docker inspect petclinic-proxy -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}')
+          echo "$NGINX_NETS" | grep -q petclinic_backend && { echo "FAIL: nginx on backend võrgus"; exit 1; } || true
+          echo "OK: nginx ei näe db-d"
+          EOF
+          echo "::notice::Võrgu segmenteerimine kinnitatud"
+
+      - name: VM jääb alles demoks
+        # VM-i EI kustutata automaatselt. Kasuta "Cleanup Hetzner test servers"
+        # workflow'd kui oled demoga lõpetanud.
+        run: |
+          echo "::notice::✓ Deploy ja testid edukad"
+          echo "::notice::✓ VM $VM_NAME jääb alles demoks"
+          echo "::notice::🌐 Ligipääs: https://$SERVER_IP/"
+          echo "::notice::🗑  Kustutamiseks käivita 'Cleanup Hetzner test servers' workflow"
+
+      # Kui test ebaõnnestus JA kasutaja EI valinud keep_on_failure=true,
+      # siis kustuta VM ära, et prahti ei jääks.
+      - name: Kustuta VM ebaõnnestumisel
+        if: failure() && github.event.inputs.keep_on_failure != 'true'
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: |
+          if hcloud server describe "$VM_NAME" >/dev/null 2>&1; then
+            hcloud server delete "$VM_NAME"
+            echo "::notice::VM $VM_NAME kustutatud (test ebaõnnestus)"
+          fi
